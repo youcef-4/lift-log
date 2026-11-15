@@ -160,6 +160,19 @@ body.is-dragging{user-select:none;-webkit-user-select:none}
 .setrow.drop .step input{font-size:19px}
 .setmenu{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;padding:0 0 6px}
 .hist-ex .hn{display:inline-block;min-width:26px;color:var(--accent-text);font-weight:600;font-variant-numeric:tabular-nums}
+.pbar{height:8px;background:var(--sunk);border-radius:4px;overflow:hidden;margin:10px 0 12px}
+.pbar i{display:block;height:100%;background:var(--accent);border-radius:4px}
+.prog .nm{font-family:var(--display);font-weight:700;font-size:26px;line-height:1.1;margin:2px 0}
+.prog .phase{margin:14px 0 2px}
+.prog .routine .nm{font-size:18px}
+.prog .row{margin-top:10px}
+.done-mark{color:var(--good);font-family:var(--body);font-size:13px;font-weight:600;margin-left:6px}
+.last b.tgt{color:var(--ink)}
+.sug{display:flex;gap:8px;align-items:baseline;margin:-4px 0 10px;font-size:13px;color:var(--muted)}
+.sug b{font-family:var(--display);font-size:17px;font-weight:700;color:var(--good);white-space:nowrap}
+.sug b.same{color:var(--ink)}
+.sug b.est{color:var(--accent-text)}
+.hrt{display:block;font-size:13px;color:var(--muted);font-weight:500}
 .section-h{font-family:var(--display);font-weight:700;font-size:22px;margin:8px 0 0}
 </style>
 </head>
@@ -185,8 +198,8 @@ body.is-dragging{user-select:none;-webkit-user-select:none}
 (function(){
 const DEFAULT_EX=["Bench press","Incline dumbbell press","Overhead press","Squat","Deadlift","Romanian deadlift","Leg press","Pull-up","Chin-up","Dips","Push-up","Lat pulldown","Barbell row","Seated cable row","Bicep curl","Hammer curl","Tricep pushdown","Lateral raise","Leg curl","Leg extension","Calf raise","Hip thrust","Plank","Side plank"];
 const GROUPS=["Chest","Back","Shoulders","Arms","Legs","Core"];
-const LKEY="liftlog.sessions.v1",RKEY="liftlog.routines.v1",GKEY="liftlog.groups.v1",BKEY="liftlog.lastBackup.v1";
-const S={sessions:new Map(),routines:[],groups:{},confirm:null,progEx:null,loaded:false,naming:null,editRoutines:false,menu:null,renaming:null,setMenu:null};
+const LKEY="liftlog.sessions.v1",RKEY="liftlog.routines.v1",GKEY="liftlog.groups.v1",BKEY="liftlog.lastBackup.v1",PKEY="liftlog.program.v1",PLKEY="liftlog.programs.v1",FKEY="liftlog.prefs.v1";
+const S={sessions:new Map(),routines:[],groups:{},confirm:null,progEx:null,loaded:false,naming:null,editRoutines:false,menu:null,renaming:null,setMenu:null,program:null,programs:[],progOpen:false,prefs:{finisher:true}};
 const $=s=>document.querySelector(s);
 const view=$("#view");
 let needRender=false;
@@ -265,15 +278,21 @@ function readJSON(k,def){try{const r=localStorage.getItem(k);return r?JSON.parse
 function loadAll(){
   S.sessions=new Map();readJSON(LKEY,[]).forEach(s=>S.sessions.set(s.id,s));
   S.routines=readJSON(RKEY,[]);S.groups=readJSON(GKEY,{});
+  S.prefs=Object.assign({finisher:true},readJSON(FKEY,{}));
+  S.programs=readJSON(PLKEY,null);
+  if(!Array.isArray(S.programs)){const old=readJSON(PKEY,null);S.programs=old&&Array.isArray(old.workouts)?[old]:[]}
+  S.program=S.programs.find(x=>x.id===S.prefs.activeProgram)||S.programs[0]||null;
 }
 function writeKey(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){setStatus("Your phone refused to save. Free up some storage, then make a backup.")}}
 function save(){writeKey(LKEY,[...S.sessions.values()])}
 function saveRoutines(){writeKey(RKEY,S.routines)}
 function saveGroups(){writeKey(GKEY,S.groups)}
+function saveProgram(){writeKey(PLKEY,S.programs);S.prefs.activeProgram=S.program?S.program.id:null;writeKey(FKEY,S.prefs);try{localStorage.removeItem(PKEY)}catch(e){}}
+function savePrefs(){writeKey(FKEY,S.prefs)}
 function lastBackup(){try{return +localStorage.getItem(BKEY)||0}catch(e){return 0}}
 
 async function exportBackup(){
-  const data={app:"lift-log",version:2,exportedAt:new Date().toISOString(),sessions:[...S.sessions.values()],routines:S.routines,groups:S.groups};
+  const data={app:"lift-log",version:2,exportedAt:new Date().toISOString(),sessions:[...S.sessions.values()],routines:S.routines,groups:S.groups,programs:S.programs,prefs:S.prefs};
   const name="lift-log-backup-"+today()+".json";
   const blob=new Blob([JSON.stringify(data,null,1)],{type:"application/json"});
   let done=false;
@@ -287,12 +306,16 @@ async function exportBackup(){
 const cleanEx=e=>{const o={name:String(e.name).slice(0,60),kind:["weight","bw","time"].includes(e.kind)?e.kind:"weight",sides:!!e.sides,
   sets:(Array.isArray(e.sets)?e.sets:[]).map(x=>{const y={w:Math.max(0,num(x.w)),r:Math.max(0,Math.round(num(x.r))),t:Math.max(0,Math.round(num(x.t))),d:x.d!==false};
     const dr=(Array.isArray(x.drops)?x.drops:[]).map(d=>({w:Math.max(0,num(d.w)),r:Math.max(0,Math.round(num(d.r)))})).filter(d=>d.r>0);if(dr.length)y.drops=dr;return y})};
-  if(typeof e.ss==="string"&&e.ss)o.ss=e.ss.slice(0,24);return o};
+  if(typeof e.ss==="string"&&e.ss)o.ss=e.ss.slice(0,24);
+  if(Array.isArray(e.goal))o.goal=e.goal.slice(0,12).map(v=>Math.max(0,Math.round(num(v))));
+  if(typeof e.target==="string")o.target=e.target.slice(0,20);return o};
 function importBackup(file){
   const r=new FileReader();
   r.onload=()=>{
     try{
-      const data=JSON.parse(r.result);const list=Array.isArray(data)?data:data.sessions;
+      const data=JSON.parse(r.result);
+      if(data&&data.app==="lift-log-program"){applyProgram(data);return}
+      const list=Array.isArray(data)?data:data.sessions;
       if(!Array.isArray(list))throw 0;
       let n=0;
       list.forEach(s=>{
@@ -306,7 +329,11 @@ function importBackup(file){
         if(i>=0)S.routines[i]=v;else S.routines.push(v);
       });
       if(data.groups&&typeof data.groups==="object")Object.entries(data.groups).forEach(([k,v])=>{if(GROUPS.includes(v)||v==="Other")S.groups[k]=v});
-      save();saveRoutines();saveGroups();
+      const progs=Array.isArray(data.programs)?data.programs:(data.program?[data.program]:[]);
+      progs.forEach(x=>{if(x&&x.id&&Array.isArray(x.workouts)&&x.workouts.length){S.programs=S.programs.filter(q=>q.id!==x.id);S.programs.push(x)}});
+      if(data.prefs&&typeof data.prefs==="object")S.prefs=Object.assign({finisher:true},data.prefs);
+      S.program=S.programs.find(x=>x.id===S.prefs.activeProgram)||S.programs[0]||null;
+      save();saveRoutines();saveGroups();saveProgram();savePrefs();
       toast(n?"Restored "+n+" workout"+(n===1?"":"s"):"No workouts found in that file");render();
     }catch(e){toast("That file isn't a Lift Log backup")}
   };
@@ -323,6 +350,100 @@ window.addEventListener("online",()=>$("#sync").textContent="Saved on this phone
 window.addEventListener("offline",()=>$("#sync").textContent="Offline · saved on this phone");
 window.addEventListener("storage",ev=>{if([LKEY,RKEY,GKEY].includes(ev.key)){loadAll();requestRender()}});
 if("serviceWorker" in navigator){window.addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}))}
+
+/* ---------- training program ---------- */
+function applyProgram(data){
+  const ws=[];
+  (Array.isArray(data.phases)?data.phases:[]).forEach((ph,pi)=>(Array.isArray(ph&&ph.workouts)?ph.workouts:[]).forEach(w=>{
+    if(!w||!w.name||!Array.isArray(w.exercises))return;
+    const exs=w.exercises.filter(e=>e&&e.name&&Array.isArray(e.sets)&&e.sets.length).map(e=>{
+      const o={name:String(e.name).slice(0,60),sets:e.sets.slice(0,12).map(x=>typeof x==="number"?{r:Math.max(0,Math.round(x))}:{r:Math.max(0,Math.round(num(x&&x.r))),t:Math.max(0,Math.round(num(x&&x.t)))})};
+      if(["weight","bw","time"].includes(e.kind))o.kind=e.kind;if(e.sides)o.sides=true;if(typeof e.ss==="string"&&e.ss)o.ss=e.ss.slice(0,24);return o});
+    if(exs.length)ws.push({phase:pi+1,phaseName:String((ph&&ph.name)||"Phase "+(pi+1)).slice(0,40),name:String(w.name).slice(0,40),exercises:exs});
+  }));
+  if(!ws.length){toast("That program file has no workouts in it");return}
+  S.program={id:String(data.id||newId("p")).slice(0,40),name:String(data.name||"Program").slice(0,40),by:String(data.by||"").slice(0,80),workouts:ws};
+  S.programs=S.programs.filter(x=>x.id!==S.program.id);S.programs.push(S.program);
+  if(data.groups&&typeof data.groups==="object")Object.entries(data.groups).forEach(([k,v])=>{k=String(k).toLowerCase();if((GROUPS.includes(v)||v==="Other")&&!S.groups[k])S.groups[k]=v});
+  saveProgram();saveGroups();S.progOpen=false;toast("Loaded "+S.program.name+" · "+ws.length+" workouts");location.hash="#log";render();
+}
+function progState(){
+  const P=S.program;if(!P||!Array.isArray(P.workouts)||!P.workouts.length)return null;
+  const done=new Map();let last=null;
+  finished().forEach(s=>{if(s.prog&&s.prog.pid===P.id){done.set(s.prog.idx,(done.get(s.prog.idx)||0)+1);if(!last||(s.finishedAt||0)>(last.finishedAt||0))last=s}});
+  const next=last?last.prog.idx+1:0;
+  return{P,done,next,complete:next>=P.workouts.length};
+}
+function targetText(sets){const rs=sets.map(x=>+x.t?fmtT(x.t):String(+x.r||0));return rs.every(r=>r===rs[0])?sets.length+" × "+rs[0]:rs.join("-")}
+function workoutSummary(w){
+  const L=blocks(w.exercises);const singles=L.filter(b=>b.len===1).map(b=>w.exercises[b.start].name),sups=L.filter(b=>b.len>1).length;
+  return singles.slice(0,3).join(", ")+(singles.length>3?" +"+(singles.length-3):"")+(sups?(singles.length?" · ":"")+sups+" superset"+(sups===1?"":"s"):"");
+}
+const stepFor=name=>/dumbbell|\bdb\b|kettlebell/i.test(name)?2:2.5;
+const roundTo=(w,st)=>Math.max(0,Math.round(w/st)*st);
+function suggestWeight(name,kind,plan){
+  if(kind==="time")return null;
+  const last=lastFor(name);if(!last||kindOfEx(last.e)!==kind)return null;
+  const sets=last.e.sets.filter(x=>valid(last.e,x));if(!sets.length)return null;
+  const tr=+plan[0].r||0;if(!tr)return null;
+  const lr=(Array.isArray(last.e.goal)&&last.e.goal[0])?+last.e.goal[0]:tr;
+  const topW=Math.max(...sets.map(x=>+x.w||0)),st=stepFor(name);
+  const top=sets.filter(x=>(+x.w||0)===topW);
+  const desc=top.length+" × "+(top.every(x=>+x.r===+top[0].r)?top[0].r:top.map(x=>x.r).join("-"))+(topW?" at "+fmtW(topW)+" kg":"");
+  if(kind==="bw"&&!topW){
+    const hit=sets.every(x=>+x.r>=lr);
+    return{w:0,mode:hit?"up":"same",text:hit?"Bodyweight · aim for 1 more rep than last time":"Bodyweight · match "+desc+", then add a rep"};
+  }
+  if(!topW)return null;
+  if(lr===tr){
+    const hit=top.length>=Math.min(plan.length,sets.length)&&top.every(x=>+x.r>=tr);
+    if(hit)return{w:topW+st,mode:"up",text:"+"+fmtW(st)+" kg · you hit "+desc+" last time"};
+    return{w:topW,mode:"same",text:"Same weight · beat "+desc};
+  }
+  const best=Math.max(...sets.map(x=>e1rm(+x.w||0,+x.r||0)));
+  const w=roundTo(best/(1+tr/30)*0.97,st);
+  return{w:Math.max(st,w),mode:"est",text:"Estimated for "+tr+" reps from "+desc};
+}
+function planExercise(e){
+  const last=lastFor(e.name);const kind=e.kind||(last?kindOfEx(last.e):autoKind(e.name));
+  const ls=last&&kindOfEx(last.e)===kind?last.e.sets.filter(x=>valid(last.e,x)):[];
+  const sug=suggestWeight(e.name,kind,e.sets);
+  const sets=e.sets.map((p,j)=>{const src=ls[j]||ls[ls.length-1];return{w:sug?sug.w:(src?+src.w||0:0),r:+p.r||0,t:+p.t||(kind==="time"?60:0),d:false}});
+  const o={name:e.name,kind,sides:!!e.sides,sets,target:targetText(e.sets),goal:e.sets.map(p=>+p.r||0)};if(e.ss)o.ss=e.ss;if(sug)o.sug=sug;return o;
+}
+function finisherExercises(){return[{name:"Plank",kind:"time",sides:false,sets:[1,2,3].map(()=>({w:0,r:0,t:60,d:false}))},{name:"Side plank",kind:"time",sides:true,sets:[1,2,3,4].map(()=>({w:0,r:0,t:60,d:false}))}]}
+function startProgramWorkout(k){
+  const st=progState();if(!st)return;const w=st.P.workouts[k];if(!w)return;
+  const exs=w.exercises.map(planExercise);
+  if(S.prefs.finisher)finisherExercises().forEach(f=>{if(!exs.some(e=>e.name.toLowerCase()===f.name.toLowerCase()))exs.push(f)});
+  S.progOpen=false;
+  startSession(exs,w.name+" · P"+w.phase,{pid:st.P.id,idx:k});
+}
+function programCard(){
+  const st=progState();
+  if(!st)return `<div class="card"><p class="label">Training program</p><p class="sub" style="margin-bottom:10px">Load a program file to follow it workout by workout. Lift Log shows what's next and fills in the target sets and reps.</p><label class="btn" style="display:inline-flex;align-items:center">Load program file<input type="file" id="program-file" hidden></label></div>`;
+  const {P,done,next,complete}=st,n=P.workouts.length,pct=Math.round(Math.min(next,n)/n*100);
+  const w=P.workouts[Math.min(next,n-1)];
+  const head=complete
+    ?`<p class="nm">Program complete</p><p class="sub">You've done all ${n} workouts. Start again from workout 1 whenever you're ready.</p><button class="btn primary block" data-act="prog-start" data-idx="0" style="margin-top:10px;min-height:50px">Start workout 1 again</button>`
+    :`<p class="sub">Workout ${next+1} of ${n} · ${esc(w.phaseName)}</p><p class="nm">Next: ${esc(w.name)}</p><p class="sub">${esc(workoutSummary(w))}</p><button class="btn primary block" data-act="prog-start" data-idx="${next}" style="margin-top:12px;min-height:52px;font-size:16px">Start ${esc(w.name)}</button>`;
+  let list="";
+  if(S.progOpen){
+    let ph=0;
+    list=P.workouts.map((x,k)=>{
+      const hdr=x.phase!==ph?(ph=x.phase,`<p class="label phase">${esc(x.phaseName)}</p>`):"";
+      const c=done.get(k)||0;
+      return hdr+`<div class="routine"><div><p class="nm">${k+1}. ${esc(x.name)}${c?`<span class="done-mark">✓${c>1?" ×"+c:""}</span>`:""}</p><p class="sub">${esc(workoutSummary(x))}</p></div><button class="btn small${k===next?" primary":""}" data-act="prog-start" data-idx="${k}">Start</button></div>`;
+    }).join("")+`<div class="row"><label class="btn small" style="display:inline-flex;align-items:center">Add another program<input type="file" id="program-file" hidden></label>${S.confirm==="prog-rm"?`<span class="confirm"><span>Remove ${esc(P.name)} from this phone? Your logged workouts stay.</span><button class="btn danger small" data-act="prog-rm-yes">Remove program</button><button class="btn small ghost" data-act="cancel">Keep</button></span>`:`<button class="btn small ghost" data-act="prog-rm" style="color:var(--muted)">Remove program</button>`}</div>`;
+  }
+  return `<div class="card prog">
+    <div class="spread">${S.programs.length>1?`<select id="prog-switch" aria-label="Program">${S.programs.map(x=>`<option value="${esc(x.id)}"${x.id===P.id?" selected":""}>${esc(x.name)}</option>`).join("")}</select>`:`<p class="label" style="margin:0">${esc(P.name)}</p>`}<button class="btn small ghost" data-act="prog-list" aria-expanded="${S.progOpen}">${S.progOpen?"Hide workouts":"All workouts"}</button></div>
+    <div class="pbar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
+    ${head}
+    <label class="toggle" style="margin-top:10px"><input type="checkbox" id="pref-finisher"${S.prefs.finisher?" checked":""}>Add my plank finisher at the end</label>
+    ${list}
+  </div>`;
+}
 
 /* ---------- derived ---------- */
 const sorted=()=>[...S.sessions.values()].sort((a,b)=>(b.date+String(b.startedAt)).localeCompare(a.date+String(a.startedAt)));
@@ -416,8 +537,9 @@ function renderLog(){
     return `<section class="stack">
       <div><h2>Ready to train?</h2><p class="sub">${esc(fmtDate(today(),{weekday:"long",day:"numeric",month:"long"}))}</p></div>
       ${finished().length>=3&&Date.now()-lastBackup()>14*864e5?`<a class="card sub" href="#history" style="text-decoration:none;display:block">It's been a while since your last backup. <b style="color:var(--accent-text)">Save one in History →</b></a>`:""}
+      ${programCard()}
       ${routinesCard()}
-      <button class="btn ${S.routines.length?"":"primary "}block" data-act="start-empty" style="min-height:52px;font-size:16px">Start empty workout</button>
+      <button class="btn ${S.routines.length||S.program?"":"primary "}block" data-act="start-empty" style="min-height:52px;font-size:16px">Start empty workout</button>
       ${last?`<div class="card">
         <p class="label">Last workout · ${esc(fmtDate(last.date))}</p>
         <ul class="hist-ex" style="margin-top:0">${exList(last.exercises)}</ul>
@@ -514,7 +636,8 @@ function exCard(a,e,i,lab){
       <select class="kind" data-ex="${i}" id="kind-${i}" aria-label="Exercise type"><option value="weight"${k==="weight"?" selected":""}>Weights (kg)</option><option value="bw"${k==="bw"?" selected":""}>Bodyweight</option><option value="time"${k==="time"?" selected":""}>Timed hold</option></select>
       ${k==="time"?`<label class="toggle"><input type="checkbox" class="sides" data-ex="${i}" id="sides-${i}"${e.sides?" checked":""}>Left / right sides</label>`:""}
     </div>
-    <p class="last">${last?`Last time (${esc(fmtDate(last.s.date,{day:"numeric",month:"short"}))}): <b>${esc(setsText(last.e))}</b>`:"First time logging this exercise"}</p>
+    <p class="last">${e.target?`<b class="tgt">Target ${esc(e.target)}</b> · `:""}${last?`Last time (${esc(fmtDate(last.s.date,{day:"numeric",month:"short"}))}): <b>${esc(setsText(last.e))}</b>`:"First time logging this exercise"}</p>
+    ${e.sug?`<p class="sug"><b class="${e.sug.mode==="up"?"":e.sug.mode==="est"?"est":"same"}">${e.sug.mode==="up"?"↑ ":""}${e.sug.w?fmtW(e.sug.w)+" kg":"BW"}</b><span>${esc(e.sug.text)}</span></p>`:""}
     <div class="sets">
       <span class="h">✓</span><span class="h">${h2}</span><span class="h">${h3}</span><span></span>
       ${rows}
@@ -533,7 +656,7 @@ function renderHistory(){
     const sets=s.exercises.reduce((a,e)=>a+e.sets.filter(x=>valid(e,x)).length,0);
     const v=sessVol(s);
     return `<article class="card">
-      <div class="spread"><p class="date-big">${esc(fmtDate(s.date))}</p><span class="meta">${mins&&mins<600?mins+" min · ":""}${sets} sets${v?" · "+esc(fmtVol(v)):""}</span></div>
+      <div class="spread"><p class="date-big">${esc(fmtDate(s.date))}${s.routine?`<span class="hrt">${esc(s.routine)}</span>`:""}</p><span class="meta">${mins&&mins<600?mins+" min · ":""}${sets} sets${v?" · "+esc(fmtVol(v)):""}</span></div>
       <ul class="hist-ex">${exList(s.exercises)}</ul>
       ${S.naming===s.id?namingForm(s.id,s.routine):`<div class="row" style="margin-top:10px">
       ${S.confirm==="del-"+s.id?`<span class="confirm"><span>Delete this workout for good?</span><button class="btn danger small" data-act="hist-del-yes" data-id="${esc(s.id)}">Delete</button><button class="btn small ghost" data-act="cancel">Cancel</button></span>`
@@ -548,7 +671,7 @@ function backupCard(){
     <p class="label">Backup</p>
     <p class="sub" style="margin-bottom:10px">Your workouts and routines are stored only on this phone. Save a backup to iCloud Drive, Google Drive or Files now and then. ${lb?`Last backup: ${days===0?"today":days===1?"yesterday":days+" days ago"}.`:"No backup yet."}</p>
     <div class="row"><button class="btn primary" data-act="backup">Save backup</button>
-    <label class="btn" style="display:inline-flex;align-items:center">Restore from file<input type="file" id="restore-file" accept="application/json,.json" hidden></label></div>
+    <label class="btn" style="display:inline-flex;align-items:center">Restore from file<input type="file" id="restore-file" hidden></label></div>
   </div>`;
 }
 
@@ -689,10 +812,11 @@ function drawCharts(){
 }
 
 /* ---------- actions ---------- */
-function startSession(exercises,routine){
+function startSession(exercises,routine,prog){
   stopTimer(true);
   const s={id:newId(),type:"session",date:today(),startedAt:Date.now(),finishedAt:null,exercises:normalizeSS(exercises||[])};
   if(routine)s.routine=routine;
+  if(prog)s.prog=prog;
   S.sessions.set(s.id,s);save();S.confirm=null;S.menu=null;S.renaming=null;S.setMenu=null;location.hash="#log";render();window.scrollTo(0,0);
 }
 function addExercise(name){
@@ -703,8 +827,7 @@ function addExercise(name){
 }
 function addFinisher(){
   const a=active();if(!a)return;const has=n=>a.exercises.some(e=>e.name.toLowerCase()===n.toLowerCase());
-  if(!has("Plank"))a.exercises.push({name:"Plank",kind:"time",sides:false,sets:[1,2,3].map(()=>({w:0,r:0,t:60,d:false}))});
-  if(!has("Side plank"))a.exercises.push({name:"Side plank",kind:"time",sides:true,sets:[1,2,3,4].map(()=>({w:0,r:0,t:60,d:false}))});
+  finisherExercises().forEach(f=>{if(!has(f.name))a.exercises.push(f)});
   save();render();toast("Plank finisher added");
 }
 function templateFrom(exs){return normalizeSS(exs.map(e=>{const o={name:e.name,kind:kindOfEx(e),sides:!!e.sides,sets:e.sets.filter(s=>valid(e,s)).map(s=>({w:+s.w||0,r:+s.r||0,t:+s.t||0}))};if(e.ss)o.ss=e.ss;return o}).filter(e=>e.sets.length))}
@@ -757,6 +880,10 @@ view.addEventListener("click",ev=>{
   if(act==="edit-routines"){S.editRoutines=!S.editRoutines;S.confirm=null;return render()}
   if(act==="routine-del"){S.confirm="rdel-"+b.dataset.id;return render()}
   if(act==="routine-del-yes"){S.routines=S.routines.filter(r=>r.id!==b.dataset.id);saveRoutines();S.confirm=null;if(!S.routines.length)S.editRoutines=false;toast("Routine deleted");return render()}
+  if(act==="prog-start"){return startProgramWorkout(+b.dataset.idx)}
+  if(act==="prog-list"){S.progOpen=!S.progOpen;S.confirm=null;return render()}
+  if(act==="prog-rm"){S.confirm="prog-rm";return render()}
+  if(act==="prog-rm-yes"){S.programs=S.programs.filter(x=>!S.program||x.id!==S.program.id);S.program=S.programs[0]||null;saveProgram();S.confirm=null;S.progOpen=false;toast("Program removed");return render()}
   if(act==="quick-ex")return addExercise(b.dataset.name);
   if(act==="add-finisher")return addFinisher();
   if(act==="cancel"){S.confirm=null;S.naming=null;S.renaming=null;return render()}
@@ -844,6 +971,11 @@ view.addEventListener("change",ev=>{
   if(t.id==="prog-ex"){S.progEx=t.value;t.blur();needRender=false;render()}
   if(t.id==="prog-group"){const k=S.progEx.toLowerCase();if(t.value===autoGroup(S.progEx))delete S.groups[k];else S.groups[k]=t.value;saveGroups();t.blur();needRender=false;render();toast(S.progEx+" counts as "+t.value)}
   if(t.id==="restore-file"&&t.files&&t.files[0]){importBackup(t.files[0]);t.value=""}
+  if(t.id==="program-file"&&t.files&&t.files[0]){const f=t.files[0];t.value="";const r=new FileReader();
+    r.onload=()=>{try{const d=JSON.parse(r.result);if(d&&d.app==="lift-log-program")applyProgram(d);else toast("That file isn't a Lift Log program")}catch(x){toast("That file isn't a Lift Log program")}};
+    r.onerror=()=>toast("Couldn't read that file");r.readAsText(f)}
+  if(t.id==="prog-switch"){const x=S.programs.find(q=>q.id===t.value);if(x){S.program=x;saveProgram();S.progOpen=false;t.blur();needRender=false;render();toast("Switched to "+x.name)}}
+  if(t.id==="pref-finisher"){S.prefs.finisher=t.checked;savePrefs();toast(t.checked?"Plank finisher will be added":"Plank finisher won't be added")}
 });
 view.addEventListener("submit",ev=>{
   ev.preventDefault();
@@ -854,7 +986,7 @@ view.addEventListener("submit",ev=>{
     if(!v||v===e.name){S.renaming=null;return render()}
     if(a.exercises.some((x,k)=>k!==i&&x.name.toLowerCase()===v.toLowerCase())){toast(v+" is already in this workout");return}
     const untouched=!e.sets.some(s=>s.d),hasLast=!!lastFor(v,a.id);
-    e.name=v;stopTimer(true);
+    e.name=v;stopTimer(true);delete e.sug;
     if(untouched&&(hasLast||autoKind(v)!==kindOfEx(e))){const f=newExercise(v);e.kind=f.kind;e.sides=f.sides;e.sets=f.sets;toast(hasLast?"Loaded your last numbers for "+v:"Renamed to "+v)}
     else toast("Renamed to "+v);
     S.renaming=null;S.menu=null;save();render();return;

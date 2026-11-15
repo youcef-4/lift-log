@@ -1,5 +1,5 @@
 // Lift Log offline cache. Bump VERSION whenever the app files change.
-const VERSION = "lift-log-v3";
+const VERSION = "lift-log-v5";
 const APP_SHELL = [
   "./",
   "./index.html",
